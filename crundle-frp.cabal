@@ -1,0 +1,39 @@
+name:                crundle-frp
+version:             0.1.0.0
+-- synopsis:
+-- description:
+homepage:            https://github.com/quickdudley/crundle-frp#readme
+license:             BSD3
+license-file:        LICENSE
+author:              Jeremy List
+maintainer:          jeremy.list@youdo.co.nz
+copyright:           Copyright © 2019 Jeremy List
+category:            Web
+build-type:          Simple
+extra-source-files:  README.md
+cabal-version:       >=1.10
+
+library
+  hs-source-dirs:      src
+  exposed-modules:
+    Reactive.Crundle,
+    Reactive.Crundle.Future,
+    Reactive.Crundle.Internal
+  other-modules:
+    Data.SkewHeap
+  build-depends:       base >= 4.7 && < 5,
+    parallel
+  default-language:    Haskell2010
+
+test-suite crundle-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  hs-source-dirs: spec
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+    crundle-frp,
+    base
+
+source-repository head
+  type:     git
+  location: https://github.com/quickdudley/crundle-frp
