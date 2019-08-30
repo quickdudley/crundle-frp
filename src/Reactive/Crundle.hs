@@ -20,6 +20,7 @@ module Reactive.Crundle (
   lag,
   poll,
   poll2,
+  flushes,
   module Reactive.Crundle.Future
  ) where
 

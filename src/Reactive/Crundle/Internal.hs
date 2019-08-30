@@ -335,6 +335,9 @@ poll2 (Behaviour g i@(Event _ gn)) f = unsafePerformIO $ do
         in rst
   return $ Behaviour g' i'
 
+flushes :: Behaviour a -> Event ()
+flushes (Behaviour _ e) = e
+
 applyIO :: Behaviour (a -> IO b) -> Event a -> Event b
 applyIO (Behaviour g c@(Event _ gn)) e@(Event _ en) = unsafePerformIO $ do
   gn' <- takeMVar gn
