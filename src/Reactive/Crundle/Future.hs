@@ -11,7 +11,12 @@ module Reactive.Crundle.Future (
 
 import Control.Applicative
 import Control.Monad
+import Control.Monad.Fix
 import Reactive.Crundle.Internal
+import System.IO.Unsafe
+import System.Mem.Weak
+import Control.Concurrent.MVar
+import qualified Data.SkewHeap as Q
 
 newtype Future a = Future (Behaviour (Maybe a))
 
@@ -31,9 +36,52 @@ instance Monad Future where
 
 instance Alternative Future where
   empty = Future (pure Nothing)
-  Future a <|> Future b = Future $ a >>= \a' -> case a' of
-    Just _ -> return a'
-    Nothing -> b
+  Future (Behaviour ag ai@(Event _ na)) <|>
+   b@(Future (Behaviour bg bi@(Event _ nb))) = unsafePerformIO $ do
+    cache <- newMVar Nothing
+    br <- newMVar b
+    na' <- takeMVar na
+    nb' <- takeMVar nb
+    let p = max na' nb' + 1
+    (i,w,ub) <- mfix $ \ ~(Event _ nr, w, _) -> do
+       ur <- newEmptyMVar
+       (i,w') <- innerEventK p cache $ \t up -> do
+         let
+           clean = IOCascade $ deRefWeak w >>= \mc -> case mc of
+             Nothing -> mempty
+             Just cache' -> takeMVar cache' >>= \mv -> putMVar cache' Nothing >> case mv of
+               Nothing -> mempty
+               Just _ -> do
+                 p' <- readMVar nr
+                 return $ Q.singleton p' $ t ()
+         u1 <- subscribe' ai (\_ -> clean) up
+         u2 <- subscribe' bi (\_ -> clean) up
+         putMVar ur u2
+         return (u1 >> u2)
+       u2 <- takeMVar ur
+       return (i,w',u2)
+    putMVar nb nb'
+    putMVar na na'
+    let
+      g' c = IOCascade $ takeMVar cache >>= \mv -> case mv of
+        Just v -> putMVar cache mv >> let IOCascade rst = c mv in rst
+        Nothing -> let
+          IOCascade rst = ag $ \ma -> case ma of
+            Just v -> IOCascade $ do
+              tryTakeMVar br >>= \mb -> case mb of
+                Nothing -> return ()
+                _ -> ub
+              putMVar cache ma
+              let IOCascade r2 = c ma in r2
+            Nothing -> IOCascade $ do
+              Future (Behaviour bg' _) <- readMVar br
+              let
+                IOCascade r2 = bg' $ \mb -> IOCascade $ do
+                  putMVar cache mb
+                  let IOCascade r3 = c mb in r3
+              r2
+          in rst
+    return $ Future (Behaviour g' i)
 
 awaitIO :: Event a -> (a -> IO (Maybe b)) -> (a -> b -> IO b) -> IO (Future b)
 awaitIO e w u = Future <$> stepperIO e (\a s -> case s of
