@@ -2,6 +2,7 @@ module Reactive.Crundle.Internal where
 
 import System.Mem.Weak
 import Control.Concurrent.MVar
+import Control.Concurrent (forkIO)
 import Data.IORef
 import System.IO.Unsafe
 import qualified Data.SkewHeap as Q
@@ -512,3 +513,12 @@ lag ~(Behaviour g u) = unsafePerformIO $ do
         in rst
       Just v -> putMVar cache mc >> let IOCascade rst = c v in rst
   return $ Behaviour (qs `seq` g') u'
+
+async :: Event a -> (a -> IO b) -> Event b
+async e f = unsafePerformIO $
+  innerEventW 0 (\t n -> subscribe' e (\a -> IOCascade $
+     mempty <$ forkIO (f a >>= \b -> takeMVar cascadeLock >>
+       finally (runCascade (t b)) (putMVar cascadeLock ())
+     )
+    ) mempty
+   )

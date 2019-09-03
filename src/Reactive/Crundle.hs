@@ -22,6 +22,7 @@ module Reactive.Crundle (
   poll,
   poll2,
   flushes,
+  async,
   module Reactive.Crundle.Future
  ) where
 
