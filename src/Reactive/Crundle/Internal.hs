@@ -430,6 +430,35 @@ queryFilter p@(Event _ pr) q = unsafePerformIO $ do
   putMVar pr n
   return r
 
+eitherEIO :: Event a -> (a -> IO (Either l r)) -> (Event l, Event r)
+eitherEIO p@(Event _ pr) q = unsafePerformIO $ do
+  n <- takeMVar pr
+  let n' = n + 1
+  lr <- newEmptyMVar
+  r <- mfix $ \ ~(Event _ psr) -> innerEventW n' (\rt rn -> do
+    uc <- newMVar 2
+    ur <- newEmptyMVar
+    let
+      u = takeMVar uc >>= \c -> if c == 1
+        then takeMVar ur >>= id
+        else putMVar uc (c - 1)
+    l <- mfix $ \ ~(Event _ psl) -> innerEventW n' (\lt ln ->
+      subscribe' p (\a -> IOCascade $ q a >>= \er -> case er of
+        Left b -> do
+          n'' <- readMVar psl
+          return $ Q.singleton n'' $ lt b
+        Right b -> do
+          n'' <- readMVar psr
+          return $ Q.singleton n'' $ rt b
+       ) (ln <> rn) >>= putMVar ur >> return u
+     )
+    putMVar lr l
+    return u
+   )
+  putMVar pr n
+  l <- takeMVar lr
+  return (l,r)
+
 -- | Create an event which changes source when the original event fires.
 -- Covers the same use-cases as the 'Monad' instance suggested in Conal
 -- Elliott's paper, but is not a direct replacement.
