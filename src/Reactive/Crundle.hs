@@ -1,6 +1,7 @@
 module Reactive.Crundle (
   Event,
   Behaviour,
+  IOCascade,
   sourceEvent,
   subscribe,
   never,
@@ -23,6 +24,10 @@ module Reactive.Crundle (
   poll2,
   flushes,
   async,
+  split,
+  Split,
+  SinkList(..),
+  EventList(..),
   module Reactive.Crundle.Future
  ) where
 

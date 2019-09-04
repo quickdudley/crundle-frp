@@ -1,8 +1,10 @@
+{-# Language DataKinds, TypeFamilies, TypeOperators, RankNTypes, PolyKinds, UndecidableInstances, FlexibleContexts, ScopedTypeVariables #-}
 module Reactive.Crundle.Internal where
 
 import System.Mem.Weak
 import Control.Concurrent.MVar
 import Control.Concurrent (forkIO)
+import Data.Proxy
 import Data.IORef
 import System.IO.Unsafe
 import qualified Data.SkewHeap as Q
@@ -11,6 +13,7 @@ import Control.Monad.Fix
 import Control.Parallel
 import Control.Exception (finally)
 import Foreign.StablePtr
+import GHC.TypeLits
 
 data Event a = Event (MVar [(IORef (), a -> IOCascade, Int -> IOCascade)]) (MVar Int)
 data Behaviour a = Behaviour ((a -> IOCascade) -> IOCascade) (Event ())
@@ -79,7 +82,7 @@ innerEventW p sub = do
   num <- newMVar p
   void $ mfix $ \w -> do
     u <- sub (\a -> IOCascade $ deRefWeak w >>= \ml -> case ml of
-      Nothing -> return mempty
+      Nothing -> mempty
       Just lr' -> do
         h <- readMVar lr'
         let IOCascade rst = mconcat $ map (\(_,r,_) -> r a) h in rst
@@ -88,7 +91,9 @@ innerEventW p sub = do
       if num' < np
         then do
           let d = np + 1
-          h <- readMVar lr
+          h <- deRefWeak w >>= \ml -> case ml of
+            Nothing -> return []
+            Just lr' -> readMVar lr'
           putMVar num np
           let IOCascade rst = mconcat $ map (\(_,_,r) -> r d) h in rst
         else putMVar num num' >> mempty
@@ -522,3 +527,69 @@ async e f = unsafePerformIO $
      )
     ) mempty
    )
+
+data family SinkList (m :: *) (l :: [*]) :: *
+data instance SinkList m '[] = SinkNil
+infixr 5 :>
+data instance SinkList m (x ': xs) = (x -> m) :> SinkList m xs
+
+data family EventList (l :: [*]) :: *
+data instance EventList '[] = EventNil
+infixr 5 :^
+data instance EventList (x ': xs) = (Event x) :^ EventList xs
+
+split :: forall l a . (Split l, KnownNat (Length l)) => Event a -> (SinkList IOCascade l -> a -> IOCascade) -> EventList l
+split p@(Event _ pr) df = unsafePerformIO $ do
+  len <- newMVar $ natVal (Proxy :: Proxy (Length l))
+  n <- takeMVar pr
+  ur <- newEmptyMVar
+  uw <- unsafeInterleaveIO $ takeMVar ur
+  (sinks, events, up) <- split' (n + 1) uw
+  let adf = df sinks
+  u <- subscribe' p (\a -> IOCascade $ do
+    p' <- readMVar pr
+    return $ Q.singleton (p' + 1) $ adf a
+   ) up
+  putMVar ur $ do
+    rl <- takeMVar len
+    if rl == 1
+      then u
+      else putMVar len (rl - 1)
+  putMVar pr n
+  return events
+
+class Split (l :: [*]) where
+  split' :: Int -> IO () -> IO (SinkList IOCascade l, EventList l, Int -> IOCascade)
+
+instance Split '[] where
+  split' _ _ = return (SinkNil, EventNil, mempty)
+
+instance Split r => Split (a ': r) where
+  split' p u = do
+    lr <- newMVar []
+    num <- newMVar p
+    (sr, er, upr) <- split' p u
+    w <- mkWeakMVar lr u
+    let
+      s a = IOCascade $ deRefWeak w >>= \ml -> case ml of
+        Nothing -> mempty
+        Just lr' -> do
+          h <- readMVar lr'
+          let IOCascade rst = mconcat $ map (\(_,r,_) -> r a) h in rst
+      e = Event lr num
+      up n = IOCascade $ takeMVar num >>= \n' -> if n > n
+        then deRefWeak w >>= \ml -> case ml of
+          Nothing -> putMVar num n' >> mempty
+          Just lr' -> do
+            h <- readMVar lr'
+            let
+              n1 = n + 1
+              IOCascade rst = mconcat $ map (\(_,_,r) -> r n1) h
+            putMVar num n
+            rst
+        else putMVar num n' >> mempty
+    return (s :> sr, e :^ er, up <> upr)
+
+type family Length (l :: [a]) :: Nat where
+  Length '[] = 0
+  Length (_ ': r) = 1 + Length r
