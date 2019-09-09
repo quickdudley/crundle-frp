@@ -157,6 +157,24 @@ instance Monoid (Event a) where
     zipWithM_ (\(Event _ n) n' -> putMVar n n') l pl
     return r
 
+aggregate :: [Event ()] -> Event ()
+aggregate l = unsafePerformIO $ do
+  blockR <- newMVar False
+  let s@(Event _ p) = mconcat l
+  n <- takeMVar p
+  r <- innerEventW (n + 1) (\t ->
+    subscribe' s $ \_ -> IOCascade $ takeMVar blockR >>= \ib ->
+    putMVar blockR True >> if ib
+      then mempty
+      else let
+        IOCascade rst = t () <> (IOCascade . return) (Q.singleton maxBound $ IOCascade $
+           takeMVar blockR >> putMVar blockR False >> mempty
+          )
+        in rst
+   )
+  putMVar p n
+  return r
+
 instance Functor Behaviour where
   fmap f (Behaviour g i@(Event _ n)) = unsafePerformIO $ do
     cache <- newMVar Nothing

@@ -16,6 +16,7 @@ module Reactive.Crundle (
   justE,
   eitherE,
   eitherEIO,
+  aggregate,
   queryFilter,
   switcher,
   filterE,
