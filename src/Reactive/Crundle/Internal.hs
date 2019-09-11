@@ -491,7 +491,9 @@ switcher s@(Event _ sr) = do
   u1r <- newMVar (return ())
   n <- readMVar sr
   innerEventW n (\t0 un -> do
-    u0 <- subscribe' s (\e1@(Event _ ir) -> IOCascade $ do
+    u0 <- subscribe' s (\e1@(Event _ ir) -> IOCascade $
+     return $ Q.singleton maxBound $ IOCascade $
+     do
       u1 <- takeMVar u1r
       u1
       u' <- subscribe' e1 t0 un
