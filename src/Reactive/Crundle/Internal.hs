@@ -1,9 +1,9 @@
-{-# Language DataKinds, TypeFamilies, TypeOperators, RankNTypes, PolyKinds, UndecidableInstances, FlexibleContexts, ScopedTypeVariables #-}
+{-# Language DataKinds, LambdaCase, TypeFamilies, TypeOperators, RankNTypes, PolyKinds, UndecidableInstances, FlexibleContexts, ScopedTypeVariables #-}
 module Reactive.Crundle.Internal where
 
 import System.Mem.Weak
 import Control.Concurrent.MVar
-import Control.Concurrent (forkIO)
+import Control.Concurrent (ThreadId, forkIO, killThread)
 import Data.Proxy
 import Data.IORef
 import System.IO.Unsafe
@@ -11,7 +11,7 @@ import qualified Data.SkewHeap as Q
 import Control.Monad
 import Control.Monad.Fix
 import Control.Parallel
-import Control.Exception (finally)
+import Control.Exception (bracket_)
 import Foreign.StablePtr
 import GHC.TypeLits
 
@@ -49,11 +49,9 @@ sourceEvent = do
   lr <- newMVar []
   num <- newMVar 0
   let
-    t a = do
-      takeMVar cascadeLock
-      flip finally (putMVar cascadeLock ()) $ do
-        h <- readMVar lr
-        runCascade $ mconcat $ map (\(_,r,_) -> r a) h
+    t a = flip (bracket_ (takeMVar cascadeLock)) (putMVar cascadeLock ()) $ do
+      h <- readMVar lr
+      runCascade $ mconcat $ map (\(_,r,_) -> r a) h
   return (Event lr num, t)
 
 innerEventK :: Int -> MVar k -> ((a -> IOCascade) -> (Int -> IOCascade) -> IO (IO ())) -> IO (Event a, Weak (MVar k))
@@ -539,14 +537,64 @@ lag ~(Behaviour g u) = unsafePerformIO $ do
       Just v -> putMVar cache mc >> let IOCascade rst = c v in rst
   return $ Behaviour (qs `seq` g') u'
 
+-- | Begins an action concurrently each time the source event fires. The
+-- resultant event will fire when the action completes.
 async :: Event a -> (a -> IO b) -> Event b
 async e f = unsafePerformIO $
   innerEventW 0 (\t n -> subscribe' e (\a -> IOCascade $
-     mempty <$ forkIO (f a >>= \b -> takeMVar cascadeLock >>
-       finally (runCascade (t b)) (putMVar cascadeLock ())
+     mempty <$ forkIO (f a >>= \b -> bracket_
+       (takeMVar cascadeLock) (runCascade (t b)) (putMVar cascadeLock ())
      )
     ) mempty
    )
+
+-- | Begins an action concurrently if the source event fires. For a given event
+-- created with this function only one concurrent action will run at any given
+-- time. If the source event fires again while the concurrent action is still
+-- running then the action will run again with the last value when it's finished
+asyncSW :: Event a -> (a -> IO b) -> IO (Event b)
+asyncSW e f = do
+  current <- newMVar Nothing
+  nxt <- newMVar Nothing
+  innerEventW 0 (\t n -> let
+   start a = takeMVar current >>= \case
+     Nothing -> do
+       tid <- forkIO $ loop a
+       putMVar current (Just tid)
+     Just tid -> do
+       takeMVar nxt
+       putMVar nxt (Just a)
+       putMVar current (Just tid)
+   checkNxt = takeMVar current >>= \tid -> takeMVar nxt >>= \mn ->
+     putMVar nxt Nothing >> case mn of
+       Nothing -> do
+         putMVar current Nothing
+       Just nv -> do
+         putMVar current tid
+         loop nv
+   loop a = do
+     b <- f a
+     bracket_ (takeMVar cascadeLock)
+       (runCascade (t b)) (putMVar cascadeLock () >> checkNxt)
+   in subscribe' e (IOCascade . (mempty <$) . start) mempty)
+
+-- | Begins an action concurrently if the source event fires, aborting and
+-- restarting if the event fires again before the action is complete.
+asyncSK :: Event a -> (a -> IO b) -> IO (Event b)
+asyncSK e f = do
+  current <- newMVar Nothing
+  innerEventW 0 (\t n -> subscribe' e (\a -> IOCascade $ mempty <$ do
+    takeMVar current >>= \case
+      Nothing -> return ()
+      Just tid -> killThread tid
+    tid <- forkIO $ do
+      b <- f a
+      bracket_
+        (takeMVar current >> takeMVar cascadeLock)
+        (runCascade (t b))
+        (putMVar cascadeLock () >> putMVar current Nothing)
+    putMVar current (Just tid)
+   ) mempty)
 
 data family SinkList (m :: *) (l :: [*]) :: *
 data instance SinkList m '[] = SinkNil

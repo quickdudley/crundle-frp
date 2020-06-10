@@ -25,6 +25,8 @@ module Reactive.Crundle (
   poll2,
   flushes,
   async,
+  asyncSW,
+  asyncSK,
   split,
   Split,
   SinkList(..),
