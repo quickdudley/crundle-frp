@@ -590,9 +590,9 @@ asyncSK e f = do
     tid <- forkIO $ do
       b <- f a
       bracket_
-        (takeMVar current >> takeMVar cascadeLock)
+        (takeMVar cascadeLock >> takeMVar current >> putMVar current Nothing)
         (runCascade (t b))
-        (putMVar cascadeLock () >> putMVar current Nothing)
+        (putMVar cascadeLock ())
     putMVar current (Just tid)
    ) mempty)
 
